@@ -80,6 +80,58 @@ useful for providing specialized implementations, such as GPU-based codecs. In c
 multiple codecs, the [`zarr.config`][] mechanism can be used to select the preferred
 implementation.
 
+### Try a custom codec locally
+
+This bytes-to-bytes codec reverses each chunk's bytes. Reversing them again
+decodes the chunk. The example is for learning the codec interface, not for
+compression.
+
+```python test="true" session="custom-codec"
+from dataclasses import dataclass
+from tempfile import TemporaryDirectory
+
+import numpy as np
+import zarr
+from zarr.abc.codec import BytesBytesCodec
+from zarr.registry import register_codec
+
+
+@dataclass(frozen=True)
+class ReverseBytes(BytesBytesCodec):
+    is_fixed_size = True
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls()
+
+    def to_dict(self):
+        return {"name": "example.reverse_bytes", "configuration": {}}
+
+    def compute_encoded_size(self, input_byte_length, chunk_spec):
+        return input_byte_length
+
+    async def _encode_single(self, chunk_bytes, chunk_spec):
+        return chunk_spec.prototype.buffer.from_bytes(chunk_bytes.to_bytes()[::-1])
+
+    _decode_single = _encode_single
+
+
+register_codec("example.reverse_bytes", ReverseBytes)
+
+with TemporaryDirectory() as store:
+    values = np.arange(6, dtype="uint8")
+    zarr.create_array(
+        store, data=values, chunks=(3,), zarr_format=3, compressors=[ReverseBytes()]
+    )
+    reopened = zarr.open_array(store, mode="r")
+    np.testing.assert_array_equal(reopened[:], values)
+```
+
+`register_codec` registers the class in the current Python process. When the array
+is reopened, Zarr uses the name stored in its metadata to find the class. To
+reopen the array from another process, register the class there too, or install
+a package that registers it through an entry point as described above.
+
 ## Custom stores
 
 Custom stores can be created by implementing the [`zarr.abc.store.Store`][] interface.
